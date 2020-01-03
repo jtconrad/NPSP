@@ -188,14 +188,14 @@ public class ALLO_Allocations_TDTM extends TDTM_Runnable {
         if (triggerAction == TDTM_Runnable.Action.AfterInsert) {
             fillMapWrapper(listOppsForProcessing);
 
-            copyRecurringDonationCampaignAllocations(listOppsForProcessing);
+            copyRecurringDonationCampaignAndPaymentAllocations(listOppsForProcessing);
 
         } else if (triggerAction == TDTM_Runnable.Action.AfterUpdate) {
             List<Opportunity> opps = new List<Opportunity>(listOppsForProcessing);
             opps.addAll(oppsWithNullOldAmount);
             fillMapWrapper(opps);
 
-            copyRecurringDonationCampaignAllocations(oppsWithNullOldAmount);
+            copyRecurringDonationCampaignAndPaymentAllocations(oppsWithNullOldAmount);
             opportunityAmountCurrencyChange(listOppsForProcessing);
         }
     }
@@ -259,7 +259,7 @@ public class ALLO_Allocations_TDTM extends TDTM_Runnable {
 
         if (pmtsNeedingAllocations.size() > 0) {
             fillMapWrapper(pmtsNeedingAllocations);
-            copyRecurringDonationCampaignAllocations(pmtsNeedingAllocations);
+            copyRecurringDonationCampaignAndPaymentAllocations(pmtsNeedingAllocations);
         }
 
         if (triggerAction == TDTM_Runnable.Action.AfterUpdate) {
@@ -524,7 +524,7 @@ public class ALLO_Allocations_TDTM extends TDTM_Runnable {
                 }
 
                 //then, recreate them based on the recurring donation
-                copyRecurringDonationCampaignAllocations(listRecDonOpps);
+                copyRecurringDonationCampaignAndPaymentAllocations(listRecDonOpps);
             }
         }
     }
@@ -535,7 +535,7 @@ public class ALLO_Allocations_TDTM extends TDTM_Runnable {
     * @param listSObjs A list of Opportunities or Payments.
     * @return void This method modifies class variables and doesn't return anything.
     ********************************************************************************************************/
-    private void copyRecurringDonationCampaignAllocations(List<SObject> listSObjs) {
+    private void copyRecurringDonationCampaignAndPaymentAllocations(List<SObject> listSObjs) {
 
         for (SObject sObj : listSObjs) {
 
@@ -601,8 +601,11 @@ public class ALLO_Allocations_TDTM extends TDTM_Runnable {
 
                     //Calculate proportional amount for non-percentage based Payment allocations
                     if (sObj instanceof npe01__OppPayment__c && allo.Percent__c == null) {
-                        allo.Percent__c = allo.Amount__c / wrap.parentAmount * 100;
-                        allo.Amount__c = (amount * allo.Percent__c * .01).setScale(2);
+                        // Do not round the percent yet, we want the most accurate Amount value possible
+                        Decimal alloPercent = allo.Amount__c / wrap.parentAmount * 100;
+                        allo.Amount__c = (amount * alloPercent * .01).setScale(2);
+                        // Round the visible percentage value to 2 decimal places after the amount is calculated
+                        allo.Percent__c = alloPercent.setScale(2, System.RoundingMode.HALF_UP);
 
 
                     }
@@ -622,6 +625,10 @@ public class ALLO_Allocations_TDTM extends TDTM_Runnable {
 
                     if (isPaymentAllocation == true && alloInMap != null) {
                         alloInMap.Amount__c += allo.Amount__c;
+                        if (alloInMap.Percent__c != null && allo.Percent__c != null) {
+                            // If both Payment Allocations have a percent set (which they should), maintain the total
+                            alloInMap.Percent__c += allo.Percent__c;
+                        }
                     }
 
                     remainder -= allo.Amount__c;
@@ -635,21 +642,10 @@ public class ALLO_Allocations_TDTM extends TDTM_Runnable {
                     }
                 }
 
-                // Only set the percentages and update the list to insert to the consolidated list
-                // when it's a payment.
+                // Only update the list to insert to the consolidated list when it's a payment.
                 if (isPaymentAllocation == true) {
-                    List<Allocation__c> consolidatedAllocationList = GAUtoAlloMapping.values();
-
-
-                    // Only set the percentage if it is a payment or an opportunity that isn't tied to a campaign or a recurring donation.
-                    // At this point, only the amounts on each allocation is correct, not the percentage.
-                    // Go through the allocation and adjust the percentage so it is correct.
-                    for (Allocation__c consolidatedAllocation : consolidatedAllocationList) {
-                        consolidatedAllocation.Percent__c = consolidatedAllocation.Amount__c / amount * 100;
-                    }
-
                     // Set the consolidated list as the list to insert
-                    listAlloForInsert = consolidatedAllocationList;
+                    listAlloForInsert = GAUtoAlloMapping.values();
                 }
 
                 //if our remainder is negative, only create percentage based allocations
